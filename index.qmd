@@ -1,0 +1,202 @@
+---
+title: "Guidance connectoModa"
+author: 
+  Idrissa DABO
+title-block-banner: "#D7DBDD"
+date-modified: "08/24/2024 01:11"
+date-format: "MM/D/YYYY, HH:mm"
+lang: fr
+language: 
+  title-block-author-single: "RAM Officer"
+  title-block-modified: "Last update"
+format: 
+  html:
+    self-contained: true
+    toc: true
+    toc-location: right
+editor: visual
+---
+
+```{r echo=FALSE}
+  htmltools::img(src = knitr::image_uri(file.path("image/WFP-logo.png")), 
+               alt = 'logo', 
+               style = 'position:absolute; top:5px; right:15px; padding:10px; max-width: 13%; max-height: 13%')
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(DT)
+```
+
+## I- Introduction
+
+**NB** : **The IDs and Tokens are not linked to any WFP account. Colleagues interested in replicating the exact same example can contact me on Teams to obtain the Token used in this example, which they can then adapt to their own projects by following the guide.**
+
+The connectoModa package allows you to directly download a database stored in Moda from R. It also provides the ability to retrieve a list of team members with access to the project, along with their access levels. The main advantage is that it allows access to the database even when there are issues with Moda that prevent direct connection.
+
+## II- How to download a database
+
+To download a database using the **connectoModa** package, it is necessary to log in to Moda at least once to obtain the project Form ID and token.
+
+The Form ID is a numerical identifier that corresponds to the last digit displayed after selecting the project, as shown in the image below.
+
+To obtain the token, select **Settings**, then **API Gateway**. The token is in alphanumeric format.
+
+formid ![Form_id](image/form_id.PNG) token ![Token](image/api_key2.PNG){width="476"}
+
+Who has access to the database?
+
+```{r warning=FALSE}
+library(connectoModa)
+
+get_user_moda(form_id = 202344,Token = "")
+
+```
+
+```{r warning=FALSE, echo=FALSE}
+library(connectoModa)
+
+get_user_moda(form_id = 202344,Token = "ee9949e8875da3d7bbc63dfb6a8e1ac8d9989030")
+
+```
+
+Download the database.
+
+```{r warning=FALSE,message=FALSE}
+dataset <- get_data_moda(form_id = 202344,Token = "")
+datatable(head(dataset,2))
+```
+
+```{r warning=FALSE,message=FALSE, echo=FALSE}
+dataset <- get_data_moda(form_id = 202344,Token = "ee9949e8875da3d7bbc63dfb6a8e1ac8d9989030")
+datatable(head(dataset,2))
+```
+
+The package successfully downloaded the database. However, there is an issue: sections appear in the variable names, and for the variable "sex", instead of "male" and "female," I have the values "1" and "2." How can I fix this?
+
+![](image/issue.PNG){fig-align="center" width="228"}
+
+## III- How to have variable names and modalities instead of numbers?
+
+### III-1- Correct variable names
+
+To correct the problem with variable names, I remove the text before the / symbol as follows
+
+```{r warning=FALSE,message=FALSE}
+names(dataset) <- stringr::str_remove(names(dataset), ".*\\/")
+datatable(head(dataset,2))
+
+```
+
+### III-2- How to have the modalities of variables instead of numerical codes
+
+This is the most important part of the guidance, as it's essential to know each modality associated with the variable codes. To get the modalities we have two choices: either we do it manually using the dplyr package's case_when() function, or we download the questionnaire and do a few manipulations with the for loops. The second method is the most appropriate, as manually recoding a database of over 500 variables can be tedious.
+
+To use this method, you need to download the questionnaire from Moda and import it into R .
+
+The questionnaire used in this example is available below:
+
+```{r echo=FALSE}
+xfun::embed_file("questionnaire.xlsx")
+```
+
+The first column of the **survey** sheet contains the elements of the first column of the **choice** sheet. For example, with select_one **sex** we find **sex** in the first column of the choice sheet. The following steps will provide the modalities:
+
+1.  Import survey sheet from questionnaire
+
+2.  Import choices sheet from questionnaire
+
+3.  Split the first column of the survey sheet into 2 columns
+
+4.  Create a Null vector in which to add all the variable names in the imported database that are identical to the names in column 2 of the survey sheet
+
+5.  Transform the vector into a dataframe, then use the vlooukup function to add the variables obtained by separating the first column of the survey sheet.
+
+6.  Make a left join with the choices sheet to obtain a dataframe with the choices elements.
+
+7.  Define the columns on which to apply the vlookup and create a function that associates each variable with its column content to facilitate the vlookup.
+
+8.  Associate each variable with modalities and its column contents.
+
+9.  (**Optional**) Remove duplicated variable names and give variable names to columns with empty names
+
+10. Apply the vlookup to the entire database.
+
+```{r warning=FALSE,message=FALSE}
+# Step 1
+survey_sheet <- readxl::read_xlsx("questionnaire.xlsx",sheet = "survey")
+
+# Step 2
+choice_sheet <- readxl::read_xlsx("questionnaire.xlsx",sheet = "choices")
+
+# Step 3
+survey_sheet <- survey_sheet |> tidyr::separate(type, into = c("type", "label_choice"),sep = " ")
+
+# Step 4
+var_identifier <- NULL
+
+for (i in 1:length(names(dataset))) {
+  if (names(dataset)[i] %in% survey_sheet$name) {
+    var_identifier <-  append(var_identifier,names(dataset)[i])
+  }
+}
+
+# Step 5
+var_identifier <- as.data.frame(var_identifier)
+
+var_identifier <- var_identifier |> dplyr::mutate(
+  label_choice = maditr::vlookup(lookup_value = var_identifier,dict = survey_sheet,lookup_column = "name",result_column = "label_choice")
+) |> na.omit()
+
+var_identifier <- var_identifier |> dplyr::mutate(
+  label_var = maditr::vlookup(lookup_value = var_identifier,dict = survey_sheet,lookup_column = "name",result_column = "label::English")
+) 
+
+# Step 6
+var_identifier <- var_identifier |> dplyr::left_join(choice_sheet,by = c("label_choice"="list_name")) 
+
+var_identifier <- var_identifier |> dplyr::mutate(
+  new_var = paste(var_identifier,as.character(name),sep = "_")
+)
+
+# Step 7
+col_to_apply <- unique(var_identifier$var_identifier)
+
+concat_colname <- function(df, col_name) {
+  df[[col_name]] <- paste0(col_name, "_", df[[col_name]])
+  return(df)
+}
+# Step 8
+for (col_name in col_to_apply) {
+  dataset <- concat_colname(dataset, col_name)
+}
+
+# Step 9 Optional
+# names(dataset) <- unique(dataset)
+# names(dataset) <- ifelse(is.na(names(dataset)) | names(dataset) == "", paste0("X", seq_along(names(dataset))), names(dataset))
+
+# Step 10
+dataset <- dataset |> dplyr::mutate(
+  across(all_of(col_to_apply), ~  maditr::vlookup(lookup_value = .,dict = var_identifier,lookup_column = "new_var",result_column = "label::English"))
+)
+
+datatable(head(dataset,3))
+```
+
+### III-3- How to get variable labels
+
+Le résultat de cette partie n'est normalement visible que dans Rstudio
+
+```{r warning=FALSE,message=FALSE}
+
+for (i in seq_len(nrow(var_identifier))) {
+  var <- var_identifier$var_identifier[i]
+  lbl <- var_identifier$label_var[i]
+  if (var %in% names(dataset)) {
+    labelled::var_label(dataset[[var]]) <- lbl
+  }
+}
+
+datatable(head(dataset,3))
+```
